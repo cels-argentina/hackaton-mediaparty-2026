@@ -12,12 +12,13 @@ from sqlite_repository import SqliteArticleRepository
 
 
 async def check_feeds(settings: Settings) -> None:
-    from feed_parser import FeedParser
+    from feed_parser import FeedParser, validate_feed_content_type
     parser = FeedParser()
     async with PoliteHttpClient(settings) as client:
         for name, url in settings.rss_sources.items():
             try:
-                data, _ = await client.get_bytes(url)
+                data, content_type = await client.get_bytes(url)
+                validate_feed_content_type(url, content_type)
                 print(f"OK    {name}: {len(parser.parse(data, name))} items")
             except Exception as exc:
                 print(f"FALLA {name}: {exc}")

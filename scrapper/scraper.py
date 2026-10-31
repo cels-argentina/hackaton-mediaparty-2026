@@ -5,8 +5,9 @@ de modo que el orquestador solo coordina (SRP/DIP) y es testeable con dobles.
 from __future__ import annotations
 import asyncio
 import logging
+from email.message import Message
 from body_extractor import BodyExtractor, BeautifulSoupExtractor
-from feed_parser import FeedParseError, FeedParser
+from feed_parser import FeedParser, validate_feed_content_type
 from http_client import FetchError, PoliteHttpClient
 from keywords import KeywordMatcher
 from models import Article, ArticleRepository
@@ -38,15 +39,26 @@ class FeedScraper:
     async def fetch_relevant_articles(self) -> list[Article]:
         candidates = await self._collect_candidates()
         fresh = await self._filter_unseen(candidates)
-        enriched = await asyncio.gather(*(self._enrich(a) for a in fresh))
         relevant: list[Article] = []
-        for article in enriched:
-            matched = self._matcher.matches(article)
-            # Se marca visto aunque no coincida (evita reprocesar), salvo que falló la descarga.
-            if self._repo and (matched or article.body):
-                await self._repo.mark_seen(self._to_storable(article))
-            if matched:
-                relevant.append(self._to_storable(article))
+        limit = self._s.max_articles_per_run
+        processed = 0
+        offset = 0
+        while offset < len(fresh) and processed < limit:
+            batch = fresh[offset : offset + limit - processed]
+            offset += len(batch)
+            enriched = await asyncio.gather(*(self._enrich(a) for a in batch))
+            for article in enriched:
+                if article is None:
+                    continue
+                processed += 1
+                matched = self._matcher.matches(article)
+                storable = self._to_storable(article)
+                if self._repo:
+                    await self._repo.mark_seen(storable, relevant=matched)
+                if matched:
+                    relevant.append(storable)
+                if processed >= limit:
+                    break
         logger.info("%d artículos relevantes de %d nuevos.", len(relevant), len(fresh))
         return relevant
 
@@ -72,33 +84,39 @@ class FeedScraper:
             data, content_type = await self._client.get_bytes(
                 url, accept="application/rss+xml, application/atom+xml, application/xml, text/xml"
             )
-        if "html" in content_type and "xml" not in content_type:
-            raise FeedParseError(f"{url} devolvió HTML ({content_type})")
+        validate_feed_content_type(url, content_type)
         return self._parser.parse(data, name)
 
     async def _filter_unseen(self, candidates: list[Article]) -> list[Article]:
         fresh: list[Article] = []
         for article in candidates:
-            if len(fresh) >= self._s.max_articles_per_run:
-                break
             if self._repo and await self._repo.is_seen(article.url):
                 continue
             fresh.append(article)
         return fresh
 
-    async def _enrich(self, article: Article) -> Article:
+    async def _enrich(self, article: Article) -> Article | None:
         async with self._article_sem:
             try:
-                raw, _ = await self._client.get_bytes(article.url, accept="text/html")
+                raw, content_type = await self._client.get_bytes(
+                    article.url, accept="text/html"
+                )
+                message = Message()
+                message["content-type"] = content_type
+                charset = message.get_content_charset() or "utf-8"
+                try:
+                    html = raw.decode(charset, errors="replace")
+                except LookupError:
+                    html = raw.decode("utf-8", errors="replace")
                 body = await asyncio.to_thread(
-                    self._extractor.extract, raw.decode("utf-8", errors="replace")
+                    self._extractor.extract, html
                 )
             except FetchError as exc:
                 logger.debug("Sin cuerpo para %s: %s", article.url, exc)
-                return article
+                return None
             except Exception:
                 logger.exception("Error inesperado extrayendo %s", article.url)
-                return article
+                return None
         return article.with_body(body)
 
     def _to_storable(self, article: Article) -> Article:
@@ -110,5 +128,12 @@ class FeedScraper:
             body = full[: self._s.body_excerpt_chars]
             truncated = len(full) > len(body)
         return Article(
-            **{**article.__dict__, "body": body, "body_truncated": truncated}
+            **{
+                **article.__dict__,
+                "title": redact_pii(article.title),
+                "description": redact_pii(article.description),
+                "author": redact_pii(article.author),
+                "body": body,
+                "body_truncated": truncated,
+            }
         )

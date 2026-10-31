@@ -22,7 +22,7 @@ def normalize_url(url: str) -> str:
         for k, v in parse_qsl(parts.query, keep_blank_values=True)
         if not k.lower().startswith("utm_") and k.lower() not in TRACKING_PARAMS
     ]
-    path = parts.path.rstrip("/") or "/"
+    path = parts.path or "/"
     return urlunsplit(
         (parts.scheme.lower(), parts.netloc.lower(), path, urlencode(query), "")
     )

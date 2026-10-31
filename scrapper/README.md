@@ -44,13 +44,13 @@ La base es SQLite. Podés abrirla con [DB Browser for SQLite](https://sqlitebrow
 o desde la terminal:
 
 ```bash
-sqlite3 articles.db "SELECT first_seen, source, title, url FROM articles ORDER BY first_seen DESC;"
+sqlite3 articles.db "SELECT first_seen, source, title, url FROM articles WHERE relevant = 1 ORDER BY first_seen DESC;"
 ```
 
 Para exportar a CSV:
 
 ```bash
-sqlite3 -header -csv articles.db "SELECT * FROM articles;" > notas.csv
+sqlite3 -header -csv articles.db "SELECT * FROM articles WHERE relevant = 1;" > notas.csv
 ```
 
 ## Personalizar

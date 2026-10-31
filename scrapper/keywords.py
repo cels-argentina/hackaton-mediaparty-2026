@@ -7,7 +7,8 @@ from models import Article
 
 def fold(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text.lower())
-    return "".join(c for c in decomposed if not unicodedata.combining(c))
+    unaccented = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", unaccented).strip()
 
 
 class KeywordMatcher:

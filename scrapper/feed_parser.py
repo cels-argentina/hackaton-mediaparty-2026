@@ -42,9 +42,16 @@ def parse_date(raw: str) -> datetime | None:
 def _text(item, *tags: str) -> str:
     for tag in tags:
         node = item.find(tag)
-        if node is not None and (node.text or "").strip():
-            return node.text.strip()
+        if node is not None:
+            text = re.sub(r"\s+", " ", " ".join(node.itertext())).strip()
+            if text:
+                return text
     return ""
+
+
+def validate_feed_content_type(url: str, content_type: str) -> None:
+    if "html" in content_type and "xml" not in content_type:
+        raise FeedParseError(f"{url} devolvió HTML ({content_type})")
 
 
 class FeedParser:
@@ -63,8 +70,16 @@ class FeedParser:
     def _to_article(self, item, source: str) -> Article | None:
         url = _text(item, "link")
         if not url:
-            link = item.find(f"{_ATOM}link")
-            url = link.get("href", "") if link is not None else ""
+            for link in item.findall(f"{_ATOM}link"):
+                rel = link.get("rel", "alternate").lower()
+                media_type = link.get("type", "").split(";", 1)[0].strip().lower()
+                if (
+                    rel == "alternate"
+                    and media_type in ("", "text/html", "application/xhtml+xml")
+                    and link.get("href")
+                ):
+                    url = link.get("href", "")
+                    break
         if not url:
             return None
         try:
